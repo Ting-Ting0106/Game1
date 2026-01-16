@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>領主五子棋 V13.3 (短碼連線版)</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        /* --- 沿用 V13.3 的視覺風格 --- */
+        :root {
+            --bg: #efe3d0;
+            --grid: #5d4037;
+            --cell: #d2a679;
+            --p1: #2c3e50;
+            --p2: #c0392b;
+            --panel: #3d2b24;
+            --accent: #ffeb3b;
+        }
+
+        * {
+            touch-action: manipulation;
+            box-sizing: border-box;
+            -webkit-user-select: none;
+            margin: 0;
+            padding: 0;
+            font-family: sans-serif;
+        }
+
+        body {
+            background: var(--bg);
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            align-items: center;
+        }
+
+        /* 入口大廳 */
+        #lobby-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--panel);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+        }
+
+        .lobby-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 20px;
+            text-align: center;
+            width: 90%;
+            max-width: 350px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .mode-btn {
+            background: var(--accent);
+            color: var(--panel);
+            border: none;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            margin: 10px 0;
+            width: 100%;
+        }
+
+        #pvp-setup {
+            display: none;
+            margin-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+            padding-top: 15px;
+        }
+
+        .id-display {
+            background: #000;
+            padding: 15px;
+            border-radius: 8px;
+            color: var(--accent);
+            font-size: 24px;
+            /* 加大字體 */
+            font-weight: bold;
+            letter-spacing: 2px;
+            margin: 10px 0;
+            cursor: pointer;
+            border: 2px dashed #444;
+        }
+
+        input {
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            width: 100%;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 18px;
+            text-transform: uppercase;
+            /* 強制大寫 */
+        }
+
+        .hint-text {
+            font-size: 12px;
+            color: #ccc;
+            margin-bottom: 5px;
+        }
+
+        /* 頂部回合狀態 */
+        #turn-indicator {
+            width: 100%;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            font-weight: 900;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+            z-index: 10;
+            flex-shrink: 0;
+        }
+
+        .turn-my {
+            background: var(--p1);
+        }
+
+        .turn-opp {
+            background: var(--p2);
+        }
+
+        .turn-wait {
+            animation: blink 1.5s infinite;
+            opacity: 0.8;
+        }
+
+        @keyframes blink {
+
+            0%,
+            100% {
+                opacity: 0.6;
+            }
+
+            50% {
+                opacity: 1;
+            }
+        }
+
+        /* 核心容器 */
+        #main-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 10px;
+            width: 100%;
+            padding-top: 15px;
+        }
+
+        /* 手牌顯示區 */
+        #card-zone {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .hand-label {
+            font-size: 26px;
+            color: var(--grid);
+            font-weight: 900;
+            text-shadow: 1px 1px 0px #fff;
+        }
+
+        .card-preview {
+            width: 100px;
+            height: 135px;
+            background: #fff;
+            border: 5px solid var(--grid);
+            border-radius: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        /* 棋盤 */
+        #game-area {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            padding: 5px;
+        }
+
+        #board {
+            display: grid;
+            grid-template-columns: repeat(10, 1fr);
+            grid-template-rows: repeat(10, 1fr);
+            background: var(--grid);
+            gap: 1px;
+            border: 5px solid var(--grid);
+            width: min(95vw, 50dvh);
+            aspect-ratio: 1 / 1;
+            transition: 0.3s;
+        }
+
+        .my-turn-glow {
+            box-shadow: 0 0 30px var(--accent);
+        }
+
+        .cell {
+            background: var(--cell);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        .piece {
+            width: 90%;
+            height: 90%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: absolute;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        /* 這裡的命名對應 V13.3 的邏輯: player=藍方, ai=紅方 */
+        .piece.player {
+            background: var(--p1);
+            color: white;
+        }
+
+        .piece.ai {
+            background: var(--p2);
+            color: white;
+        }
+
+        .piece.lord {
+            border-radius: 4px;
+        }
+
+        .piece.knight,
+        .piece.mage {
+            border-radius: 50%;
+        }
+
+        .piece.converted {
+            border: 3px dashed var(--accent);
+        }
+
+        .piece.last-move {
+            border: 3px solid white;
+            animation: pulse 1s infinite alternate;
+        }
+
+        @keyframes pulse {
+            from {
+                transform: scale(1);
+            }
+
+            to {
+                transform: scale(1.15);
+            }
+        }
+
+        .dir-hint {
+            font-size: 12px;
+            color: var(--accent);
+            font-weight: bold;
+        }
+
+        /* 勝負彈窗 */
+        #win-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 2000;
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #win-overlay.show {
+            display: flex;
+        }
+
+        .win-box {
+            background: var(--panel);
+            padding: 50px 30px;
+            border-radius: 30px;
+            border: 5px solid var(--accent);
+            text-align: center;
+        }
+
+        .win-title {
+            font-size: 36px;
+            font-weight: 900;
+            color: white;
+            margin-bottom: 25px;
+        }
+
+        .win-btn {
+            padding: 15px 40px;
+            background: var(--accent);
+            color: var(--panel);
+            border: none;
+            border-radius: 25px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        #msg-pop {
+            position: absolute;
+            bottom: 10%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 12px 25px;
+            border-radius: 30px;
+            opacity: 0;
+            z-index: 1500;
+            transition: 0.3s;
+            font-size: 18px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="win-overlay">
+        <div class="win-box">
+            <div id="win-text" class="win-title">🏆 獲得勝利</div>
+            <button class="win-btn" onclick="location.reload()">再玩一局</button>
+        </div>
+    </div>
+
+    <div id="lobby-overlay">
+        <div class="lobby-card">
+            <h1 style="color:var(--accent); margin-bottom: 20px;">領主五子棋 V13.3</h1>
+            <button class="mode-btn" onclick="showPVP()">⚔️ 好友連線對戰</button>
+            <button class="mode-btn" style="background:#ddd" onclick="startAI()">🤖 挑戰 AI</button>
+
+            <div id="pvp-setup">
+                <div class="hint-text">你的房間代碼 (點擊複製):</div>
+                <div class="id-display" id="my-id" onclick="copyID()">生成中...</div>
+
+                <div class="hint-text" style="margin-top:15px">輸入好友代碼加入:</div>
+                <input type="text" id="peer-id-input" placeholder="6位數代碼" maxlength="6">
+
+                <button class="mode-btn" style="background:#fff; border:2px solid var(--accent)"
+                    onclick="connectToFriend()">加入房間</button>
+                <div id="status-msg" style="color:#ff6b6b; font-size:14px; margin-top:5px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="turn-indicator" class="turn-my">準備中...</div>
+
+    <div id="main-container">
+        <div id="card-zone">
+            <div class="hand-label">目前持有手牌</div>
+            <div class="card-preview" id="game-card">
+                <div id="res-icon" style="font-size:55px">🏰</div>
+                <div id="res-dir" style="font-size:22px; color:red; font-weight:bold; margin-top:5px;"></div>
+            </div>
+        </div>
+
+        <div id="game-area">
+            <div id="board"></div>
+        </div>
+    </div>
+
+    <div id="msg-pop"></div>
+
+    <script>
+        // --- 設定與狀態 ---
+        const SIZE = 10;
+        let peer, conn, myRole = 'PLAYER', isAI = false;
+        // PLAYER = 藍方(先手), AI = 紅方(後手) -> 這在 V13.3 邏輯是固定的
+        let board = [], turn = 'PLAYER', hand = 'LORD', handDir = null;
+        let isOver = false, isProcessing = false;
+        let lastPos = null;
+
+        const PIECE_DATA = { LORD: { i: '🏰', class: 'lord' }, KNIGHT: { i: '🐎', class: 'knight' }, MAGE: { i: '🧙', class: 'mage' } };
+        const DIRS = [{ dr: -1, dc: 0, icon: '▲' }, { dr: 1, dc: 0, icon: '▼' }, { dr: 0, dc: -1, icon: '◀' }, { dr: 0, dc: 1, icon: '▶' }];
+
+        // --- 連線邏輯 (改用短碼) ---
+        function generateShortId()
+        {
+            return Math.random().toString(36).substring(2, 8).toUpperCase();
+        }
+
+        function showPVP()
+        {
+            document.getElementById('pvp-setup').style.display = 'block';
+            if (!peer)
+            {
+                initPeer();
+            }
+        }
+
+        function initPeer()
+        {
+            if (peer) return;
+            const shortId = generateShortId();
+
+            // 使用更穩定的配置
+            peer = new Peer(shortId, {
+                host: '0.peerjs.com',
+                port: 443,
+                path: '/',
+                secure: true,
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
+                    ]
+                },
+                debug: 2 // 開啟除錯訊息（可在 console 看到詳細資訊）
+            });
+
+            peer.on('open', id =>
+            {
+                document.getElementById('my-id').innerText = id;
+                console.log('Peer ID:', id);
+            });
+
+            peer.on('error', (err) =>
+            {
+                console.error('Peer error:', err);
+                if (err.type === 'unavailable-id')
+                {
+                    // 極小機率撞號，重新整理
+                    location.reload();
+                } else if (err.type === 'network' || err.type === 'server-error')
+                {
+                    document.getElementById('status-msg').innerText = "伺服器連線失敗，請重新整理";
+                } else
+                {
+                    document.getElementById('status-msg').innerText = "連線錯誤: " + err.type;
+                }
+            });
+
+            peer.on('disconnected', () =>
+            {
+                console.log('Peer disconnected, attempting reconnect...');
+                peer.reconnect();
+            });
+
+            peer.on('connection', c =>
+            {
+                console.log('Incoming connection from:', c.peer);
+                conn = c;
+                // 被連線者當作 PLAYER (藍方/先手)
+                myRole = 'PLAYER';
+
+                // 先設置連線監聽，再啟動遊戲
+                c.on('open', () =>
+                {
+                    console.log('Connection opened');
+                    setupConn();
+                    startGame();
+                });
+            });
+        }
+
+        function connectToFriend()
+        {
+            const tid = document.getElementById('peer-id-input').value.trim().toUpperCase();
+            if (tid.length !== 6)
+            {
+                document.getElementById('status-msg').innerText = "請輸入正確的 6 位代碼";
+                return;
+            }
+
+            // 確保 peer 已初始化
+            if (!peer)
+            {
+                document.getElementById('status-msg').innerText = "初始化中，請稍候...";
+                initPeer();
+                // 等待 peer 初始化完成後再連線
+                const checkPeer = setInterval(() =>
+                {
+                    if (peer && peer.id)
+                    {
+                        clearInterval(checkPeer);
+                        doConnect(tid);
+                    }
+                }, 100);
+                return;
+            }
+
+            doConnect(tid);
+        }
+
+        function doConnect(tid)
+        {
+            document.getElementById('status-msg').innerText = "連線中...";
+            console.log('Attempting to connect to:', tid);
+
+            conn = peer.connect(tid, {
+                reliable: true
+            });
+
+            // 主動連線者當作 AI (紅方/後手，只是用變數 AI 代表 P2)
+            myRole = 'AI';
+
+            conn.on('open', () =>
+            {
+                console.log('Connection established');
+                document.getElementById('status-msg').innerText = "連線成功！";
+                setupConn();
+                startGame();
+            });
+
+            conn.on('error', (err) =>
+            {
+                console.error('Connection error:', err);
+                document.getElementById('status-msg').innerText = "連線失敗: " + err.type;
+            });
+
+            setTimeout(() =>
+            {
+                if (!conn || !conn.open)
+                {
+                    console.error('Connection timeout');
+                    document.getElementById('status-msg').innerText = "找不到房間或連線逾時，請確認代碼正確";
+                }
+            }, 8000); // 延長至 8 秒
+        }
+
+        function setupConn()
+        {
+            conn.on('data', data =>
+            {
+                console.log('Received data:', data);
+                if (data.type === 'SYNC_CARD') { hand = data.hand; handDir = data.handDir; updateCardUI(); }
+                if (data.type === 'MOVE')
+                {
+                    // 接收對手移動：如果我是 PLAYER，對手就是 AI；反之亦然
+                    const oppRole = (myRole === 'PLAYER' ? 'AI' : 'PLAYER');
+                    executeMove(data.r, data.c, oppRole, data.hand, data.handDir);
+                }
+            });
+            conn.on('close', () => 
+            {
+                console.log('Connection closed');
+                alert("對方已離開");
+                location.reload();
+            });
+            conn.on('error', (err) =>
+            {
+                console.error('Connection error:', err);
+            });
+        }
+
+        // --- 遊戲邏輯 (V13.3 原版) ---
+        function startAI() { isAI = true; myRole = 'PLAYER'; startGame(); }
+
+        function startGame()
+        {
+            document.getElementById('lobby-overlay').style.display = 'none';
+            initBoard();
+            updateTurnUI();
+            prepareTurn();
+        }
+
+        function initBoard()
+        {
+            const b = document.getElementById('board'); b.innerHTML = '';
+            board = Array(SIZE).fill(null).map(() => Array(SIZE).fill(null));
+            for (let r = 0; r < SIZE; r++)
+            {
+                for (let c = 0; c < SIZE; c++)
+                {
+                    let d = document.createElement('div');
+                    d.className = 'cell';
+                    d.onclick = () => handleTap(r, c);
+                    b.appendChild(d);
+                }
+            }
+        }
+
+        async function prepareTurn()
+        {
+            if (isOver) return;
+            isProcessing = true;
+            updateTurnUI();
+
+            // 如果是 AI 模式，或 是我的回合
+            // 這裡邏輯：如果是 PVP，輪到我時我產生隨機手牌並傳給對方
+            if (turn === myRole || isAI)
+            {
+                let r = Math.random() * 100;
+                if (r < 15) hand = 'MAGE'; else if (r < 35) hand = 'KNIGHT'; else hand = 'LORD';
+                handDir = hand === 'KNIGHT' ? DIRS[Math.floor(Math.random() * DIRS.length)] : null;
+
+                if (conn && conn.open)
+                {
+                    conn.send({ type: 'SYNC_CARD', hand, handDir });
+                }
+            }
+            updateCardUI();
+            isProcessing = false;
+
+            // AI 思考
+            if (isAI && turn === 'AI') setTimeout(aiLogic, 600);
+        }
+
+        function updateTurnUI()
+        {
+            const indicator = document.getElementById('turn-indicator');
+            const boardEl = document.getElementById('board');
+            const isMyTurn = (turn === myRole);
+
+            let turnText = "";
+            if (isAI)
+            {
+                turnText = (turn === 'PLAYER') ? "● 你的回合" : "○ AI 思考中...";
+            } else
+            {
+                turnText = isMyTurn ? "● 你的回合" : "○ 對手回合";
+            }
+
+            indicator.innerText = turnText;
+            indicator.className = (turn === 'PLAYER' ? "turn-my" : "turn-opp");
+
+            if (!isMyTurn) indicator.classList.add('turn-wait');
+
+            if (isMyTurn) boardEl.classList.add('my-turn-glow');
+            else boardEl.classList.remove('my-turn-glow');
+        }
+
+        function updateCardUI()
+        {
+            document.getElementById('res-icon').innerText = PIECE_DATA[hand].i;
+            document.getElementById('res-dir').innerText = hand === 'MAGE' ? '⇠🧙⇢' : (handDir ? handDir.icon : '');
+        }
+
+        async function handleTap(r, c)
+        {
+            if (isOver || isProcessing || turn !== myRole || board[r][c]) return;
+
+            if (conn && conn.open)
+            {
+                conn.send({ type: 'MOVE', r, c, hand, handDir });
+            }
+            await executeMove(r, c, myRole, hand, handDir);
+        }
+
+        async function executeMove(r, c, p, type, dir)
+        {
+            isProcessing = true;
+            lastPos = { r, c };
+            board[r][c] = { p, type, knightDir: dir, isConverted: false };
+            render();
+            await new Promise(res => setTimeout(res, 400));
+
+            let triggered = true;
+            while (triggered)
+            {
+                triggered = await checkAndTriggerSkills();
+                if (triggered) { render(); await new Promise(res => setTimeout(res, 400)); }
+            }
+
+            if (checkWin(p)) { isOver = true; showWin(p); return; }
+
+            turn = (p === 'PLAYER') ? 'AI' : 'PLAYER';
+            prepareTurn();
+        }
+
+        // --- 技能邏輯 (騎士衝鋒、法師轉化) ---
+        async function checkAndTriggerSkills()
+        {
+            for (let r = 0; r < SIZE; r++)
+            {
+                for (let c = 0; c < SIZE; c++)
+                {
+                    let pce = board[r][c];
+                    if (!pce) continue;
+
+                    if (pce.type === 'KNIGHT' && pce.knightDir)
+                    {
+                        let tr = r + pce.knightDir.dr, tc = c + pce.knightDir.dc;
+                        // 衝撞敵方
+                        if (tr >= 0 && tr < SIZE && tc >= 0 && tc < SIZE && board[tr][tc] && board[tr][tc].p !== pce.p)
+                        {
+                            await popMsg("騎士衝鋒！");
+                            board[tr][tc] = null; // 殺死敵方
+                            board[r][c] = null;   // 騎士犧牲
+                            return true;
+                        }
+                    } else if (pce.type === 'MAGE')
+                    {
+                        let targets = [];
+                        // 左右各一格
+                        [[0, -1], [0, 1]].forEach(([dr, dc]) =>
+                        {
+                            let tr = r + dr, tc = c + dc;
+                            if (tr >= 0 && tr < SIZE && tc >= 0 && tc < SIZE && board[tr][tc] && board[tr][tc].p !== pce.p) targets.push({ tr, tc });
+                        });
+
+                        if (targets.length > 0)
+                        {
+                            await popMsg("法術洗腦！");
+                            targets.forEach(t =>
+                            {
+                                board[t.tr][t.tc].p = pce.p;
+                                board[t.tr][t.tc].isConverted = true;
+                            });
+                            board[r][c] = null; // 法師消失
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // --- AI 邏輯 (保留原版) ---
+        function aiLogic()
+        {
+            let bestScore = -Infinity, bestMoves = [];
+            for (let r = 0; r < SIZE; r++)
+            {
+                for (let c = 0; c < SIZE; c++)
+                {
+                    if (board[r][c]) continue;
+                    let score = 0;
+                    if (hand === 'LORD')
+                    {
+                        score = evaluatePoint(r, c, 'AI') * 1.5 + evaluatePoint(r, c, 'PLAYER');
+                        if (checkFive(r, c, 'AI')) score += 50000;
+                        if (checkFive(r, c, 'PLAYER')) score += 20000;
+                    } else if (hand === 'KNIGHT' && handDir)
+                    {
+                        let tr = r + handDir.dr, tc = c + handDir.dc;
+                        if (tr >= 0 && tr < SIZE && tc >= 0 && tc < SIZE && board[tr][tc] && board[tr][tc].p === 'PLAYER') score = 1500;
+                    } else if (hand === 'MAGE')
+                    {
+                        [[0, -1], [0, 1]].forEach(([dr, dc]) =>
+                        {
+                            let tr = r + dr, tc = c + dc;
+                            if (tr >= 0 && tr < SIZE && tc >= 0 && tc < SIZE && board[tr][tc] && board[tr][tc].p === 'PLAYER') score += 1800;
+                        });
+                    }
+                    score += Math.random() * 5;
+                    if (score > bestScore) { bestScore = score; bestMoves = [{ r, c }]; }
+                    else if (score === bestScore) { bestMoves.push({ r, c }); }
+                }
+            }
+            let m = bestMoves[Math.floor(Math.random() * bestMoves.length)];
+            executeMove(m.r, m.c, 'AI', hand, handDir);
+        }
+
+        function evaluatePoint(r, c, p)
+        {
+            const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+            let totalScore = 0;
+            for (let [dr, dc] of dirs)
+            {
+                let count = 1, block = 0;
+                [1, -1].forEach(sig =>
+                {
+                    for (let i = 1; i < 5; i++)
+                    {
+                        let nr = r + dr * i * sig, nc = c + dc * i * sig;
+                        if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE)
+                        {
+                            if (board[nr][nc]?.p === p && board[nr][nc]?.type === 'LORD') count++;
+                            else if (board[nr][nc]) { block++; break; } else break;
+                        } else { block++; break; }
+                    }
+                });
+                if (count >= 5) totalScore += 10000;
+                else if (count === 4) totalScore += (block === 0 ? 5000 : 500);
+                else if (count === 3) totalScore += (block === 0 ? 400 : 50);
+            }
+            return totalScore;
+        }
+
+        // --- 勝負判定 ---
+        function checkWin(p)
+        {
+            for (let r = 0; r < SIZE; r++)
+            {
+                for (let c = 0; c < SIZE; c++)
+                {
+                    if (board[r][c]?.p === p && board[r][c]?.type === 'LORD' && checkFive(r, c, p)) return true;
+                }
+            }
+            return false;
+        }
+
+        function checkFive(r, c, p)
+        {
+            return [[1, 0], [0, 1], [1, 1], [1, -1]].some(([dr, dc]) =>
+            {
+                let count = 1;
+                [1, -1].forEach(sig =>
+                {
+                    for (let i = 1; i < 5; i++)
+                    {
+                        let nr = r + dr * i * sig, nc = c + dc * i * sig;
+                        if (nr >= 0 && nr < SIZE && nc >= 0 && nc < SIZE && board[nr][nc]?.p === p && board[nr][nc]?.type === 'LORD') count++; else break;
+                    }
+                });
+                return count >= 5;
+            });
+        }
+
+        // --- 渲染與工具 ---
+        function render()
+        {
+            const cells = document.querySelectorAll('.cell');
+            for (let r = 0; r < SIZE; r++)
+            {
+                for (let c = 0; c < SIZE; c++)
+                {
+                    let cell = cells[r * SIZE + c]; cell.innerHTML = '';
+                    let d = board[r][c];
+                    if (d)
+                    {
+                        let p = document.createElement('div');
+                        p.className = `piece ${PIECE_DATA[d.type].class} ${d.p.toLowerCase()} ${d.isConverted ? 'converted' : ''}`;
+                        if (lastPos && lastPos.r === r && lastPos.c === c) p.classList.add('last-move');
+                        p.innerHTML = `<span>${PIECE_DATA[d.type].i}</span>` + (d.knightDir ? `<span class="dir-hint">${d.knightDir.icon}</span>` : '');
+                        cell.appendChild(p);
+                    }
+                }
+            }
+        }
+
+        async function popMsg(t)
+        {
+            const m = document.getElementById('msg-pop');
+            m.innerText = t; m.style.opacity = 1;
+            await new Promise(res => setTimeout(() => { m.style.opacity = 0; res(); }, 800));
+        }
+
+        function showWin(p)
+        {
+            const overlay = document.getElementById('win-overlay');
+            const text = document.getElementById('win-text');
+            // 這裡的邏輯：如果贏家 p 等於 myRole，顯示勝利
+            // 但如果是在 AI 模式下，p='PLAYER' 就贏了
+            const iWon = (p === myRole) || (isAI && p === 'PLAYER');
+
+            text.innerText = iWon ? "🏆 領主獲得勝利！" : "💀 領地失守了...";
+            text.style.color = iWon ? "#27ae60" : "#ff4d4d";
+            overlay.classList.add('show');
+        }
+
+        function copyID()
+        {
+            const id = document.getElementById('my-id').innerText;
+            if (id && id !== '生成中...')
+            {
+                navigator.clipboard.writeText(id).then(() => popMsg("代碼已複製"));
+            }
+        }
+    </script>
+</body>
+
+</html>
