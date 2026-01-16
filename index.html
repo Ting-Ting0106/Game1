@@ -421,27 +421,39 @@
             const shortId = generateShortId();
             document.getElementById('peer-status').innerText = '連接伺服器中...';
 
-            // 嘗試多個 PeerJS 伺服器配置
-            const configs = [
-                {
-                    // 官方預設伺服器
-                    host: '0.peerjs.com',
-                    port: 443,
-                    path: '/',
-                    secure: true
-                }
-            ];
-
             peer = new Peer(shortId, {
-                ...configs[0],
+                host: '0.peerjs.com',
+                port: 443,
+                path: '/',
+                secure: true,
                 config: {
                     iceServers: [
+                        // STUN 伺服器 - 用於 NAT 穿透
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:global.stun.twilio.com:3478' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
-                    ]
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        // 公開的 TURN 伺服器 - 當 STUN 失敗時作為中繼
+                        {
+                            urls: 'turn:openrelay.metered.ca:80',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        },
+                        {
+                            urls: 'turn:openrelay.metered.ca:443',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        },
+                        {
+                            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        }
+                    ],
+                    iceTransportPolicy: 'all', // 允許所有連線方式
+                    iceCandidatePoolSize: 10
                 },
-                debug: 3 // 最高等級除錯
+                debug: 3
             });
 
             peer.on('open', id =>
@@ -480,7 +492,6 @@
                 document.getElementById('peer-status').innerText = '重新連線中...';
                 document.getElementById('peer-status').style.color = '#FF9800';
 
-                // 嘗試重連
                 setTimeout(() =>
                 {
                     if (!peer.destroyed)
@@ -495,6 +506,19 @@
                 console.log('📥 收到連線請求，來自:', c.peer);
                 conn = c;
                 myRole = 'PLAYER';
+
+                // 監聽 ICE 連線狀態
+                if (c.peerConnection)
+                {
+                    c.peerConnection.oniceconnectionstatechange = () =>
+                    {
+                        console.log('ICE 連線狀態:', c.peerConnection.iceConnectionState);
+                        if (c.peerConnection.iceConnectionState === 'connected')
+                        {
+                            console.log('✓ ICE 連線成功！');
+                        }
+                    };
+                }
 
                 c.on('open', () =>
                 {
@@ -596,11 +620,49 @@
             myRole = 'AI';
 
             let connectionTimeout;
+            let iceCheckInterval;
+
+            // 監聽 ICE 連線狀態
+            if (conn.peerConnection)
+            {
+                console.log('開始監聽 ICE 狀態...');
+
+                conn.peerConnection.oniceconnectionstatechange = () =>
+                {
+                    const state = conn.peerConnection.iceConnectionState;
+                    console.log('ICE 連線狀態:', state);
+
+                    if (state === 'connected' || state === 'completed')
+                    {
+                        console.log('✓ ICE 連線成功！');
+                        document.getElementById('status-msg').innerText = "ICE 連線成功，等待資料通道...";
+                    } else if (state === 'failed')
+                    {
+                        console.error('❌ ICE 連線失敗');
+                        document.getElementById('status-msg').innerText = "P2P 連線失敗（防火牆/NAT 問題）";
+                        clearTimeout(connectionTimeout);
+                        clearInterval(iceCheckInterval);
+                    } else if (state === 'disconnected')
+                    {
+                        console.warn('⚠ ICE 連線中斷');
+                    }
+                };
+
+                // 每秒檢查一次 ICE 狀態
+                iceCheckInterval = setInterval(() =>
+                {
+                    if (conn.peerConnection)
+                    {
+                        console.log('ICE 狀態檢查:', conn.peerConnection.iceConnectionState);
+                    }
+                }, 1000);
+            }
 
             conn.on('open', () =>
             {
                 clearTimeout(connectionTimeout);
-                console.log('✓ 連線成功建立');
+                clearInterval(iceCheckInterval);
+                console.log('✓ 資料通道已開啟');
                 document.getElementById('status-msg').innerText = "連線成功！";
                 document.getElementById('status-msg').style.color = '#4CAF50';
                 setupConn();
@@ -610,31 +672,45 @@
             conn.on('error', (err) =>
             {
                 clearTimeout(connectionTimeout);
+                clearInterval(iceCheckInterval);
                 console.error('❌ 連線錯誤:', err);
                 document.getElementById('status-msg').innerText = "連線錯誤: " + (err.type || err.message);
             });
 
             conn.on('close', () =>
             {
+                clearInterval(iceCheckInterval);
                 console.log('⚠ 連線已關閉');
             });
 
-            // 延長逾時時間到 15 秒
+            // 延長逾時時間到 20 秒（因為 TURN 可能需要更久）
             connectionTimeout = setTimeout(() =>
             {
+                clearInterval(iceCheckInterval);
                 if (!conn || !conn.open)
                 {
                     console.error('❌ 連線逾時');
-                    console.log('可能原因:');
-                    console.log('1. 對方的代碼不存在');
-                    console.log('2. 對方已離線');
-                    console.log('3. 網路環境限制 P2P 連線');
-                    console.log('4. 防火牆阻擋');
 
-                    document.getElementById('status-msg').innerText = "連線逾時。請確認:\n1. 代碼正確\n2. 對方在線上\n3. 雙方都開著網頁";
+                    if (conn && conn.peerConnection)
+                    {
+                        const iceState = conn.peerConnection.iceConnectionState;
+                        console.log('最終 ICE 狀態:', iceState);
+
+                        if (iceState === 'checking' || iceState === 'new')
+                        {
+                            document.getElementById('status-msg').innerText = "連線逾時：可能被防火牆阻擋\n請嘗試：\n1. 關閉 VPN\n2. 切換網路（WiFi ↔ 行動網路）\n3. 確認對方在線上";
+                        } else
+                        {
+                            document.getElementById('status-msg').innerText = "連線逾時\n請確認代碼正確且對方在線上";
+                        }
+                    } else
+                    {
+                        document.getElementById('status-msg').innerText = "連線逾時\n請確認代碼正確";
+                    }
+
                     document.getElementById('status-msg').style.whiteSpace = 'pre-line';
                 }
-            }, 15000);
+            }, 20000);
         }
 
         function setupConn()
