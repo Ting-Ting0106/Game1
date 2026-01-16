@@ -357,6 +357,7 @@
             <div id="pvp-setup">
                 <div class="hint-text">你的房間代碼 (點擊複製):</div>
                 <div class="id-display" id="my-id" onclick="copyID()">生成中...</div>
+                <div style="font-size:10px; color:#999; margin-top:5px;">狀態: <span id="peer-status">初始化中</span></div>
 
                 <div class="hint-text" style="margin-top:15px">輸入好友代碼加入:</div>
                 <input type="text" id="peer-id-input" placeholder="6位數代碼" maxlength="6">
@@ -416,64 +417,95 @@
         function initPeer()
         {
             if (peer) return;
-            const shortId = generateShortId();
 
-            // 使用更穩定的配置
+            const shortId = generateShortId();
+            document.getElementById('peer-status').innerText = '連接伺服器中...';
+
+            // 嘗試多個 PeerJS 伺服器配置
+            const configs = [
+                {
+                    // 官方預設伺服器
+                    host: '0.peerjs.com',
+                    port: 443,
+                    path: '/',
+                    secure: true
+                }
+            ];
+
             peer = new Peer(shortId, {
-                host: '0.peerjs.com',
-                port: 443,
-                path: '/',
-                secure: true,
+                ...configs[0],
                 config: {
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' }
+                        { urls: 'stun:global.stun.twilio.com:3478' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
                     ]
                 },
-                debug: 2 // 開啟除錯訊息（可在 console 看到詳細資訊）
+                debug: 3 // 最高等級除錯
             });
 
             peer.on('open', id =>
             {
                 document.getElementById('my-id').innerText = id;
-                console.log('Peer ID:', id);
+                document.getElementById('peer-status').innerText = '已連線 ✓';
+                document.getElementById('peer-status').style.color = '#4CAF50';
+                console.log('✓ Peer 已就緒，ID:', id);
             });
 
             peer.on('error', (err) =>
             {
-                console.error('Peer error:', err);
+                console.error('❌ Peer error:', err);
+                document.getElementById('peer-status').innerText = '錯誤: ' + err.type;
+                document.getElementById('peer-status').style.color = '#f44336';
+
                 if (err.type === 'unavailable-id')
                 {
-                    // 極小機率撞號，重新整理
-                    location.reload();
+                    console.log('ID 衝突，重新生成...');
+                    setTimeout(() => location.reload(), 1000);
                 } else if (err.type === 'network' || err.type === 'server-error')
                 {
-                    document.getElementById('status-msg').innerText = "伺服器連線失敗，請重新整理";
+                    document.getElementById('status-msg').innerText = "無法連接到 PeerJS 伺服器";
+                } else if (err.type === 'peer-unavailable')
+                {
+                    document.getElementById('status-msg').innerText = "找不到該房間代碼";
                 } else
                 {
-                    document.getElementById('status-msg').innerText = "連線錯誤: " + err.type;
+                    document.getElementById('status-msg').innerText = "錯誤: " + err.type;
                 }
             });
 
             peer.on('disconnected', () =>
             {
-                console.log('Peer disconnected, attempting reconnect...');
-                peer.reconnect();
+                console.log('⚠ Peer 斷線，嘗試重連...');
+                document.getElementById('peer-status').innerText = '重新連線中...';
+                document.getElementById('peer-status').style.color = '#FF9800';
+
+                // 嘗試重連
+                setTimeout(() =>
+                {
+                    if (!peer.destroyed)
+                    {
+                        peer.reconnect();
+                    }
+                }, 1000);
             });
 
             peer.on('connection', c =>
             {
-                console.log('Incoming connection from:', c.peer);
+                console.log('📥 收到連線請求，來自:', c.peer);
                 conn = c;
-                // 被連線者當作 PLAYER (藍方/先手)
                 myRole = 'PLAYER';
 
-                // 先設置連線監聽，再啟動遊戲
                 c.on('open', () =>
                 {
-                    console.log('Connection opened');
+                    console.log('✓ 連線已建立');
                     setupConn();
                     startGame();
+                });
+
+                c.on('error', (err) =>
+                {
+                    console.error('❌ 連線錯誤:', err);
                 });
             });
         }
@@ -487,20 +519,55 @@
                 return;
             }
 
-            // 確保 peer 已初始化
+            // 確保 peer 已初始化並連線
             if (!peer)
             {
                 document.getElementById('status-msg').innerText = "初始化中，請稍候...";
                 initPeer();
-                // 等待 peer 初始化完成後再連線
+
                 const checkPeer = setInterval(() =>
                 {
                     if (peer && peer.id)
                     {
                         clearInterval(checkPeer);
+                        console.log('✓ Peer 初始化完成，開始連線');
                         doConnect(tid);
                     }
                 }, 100);
+
+                // 10秒後仍未初始化則提示
+                setTimeout(() =>
+                {
+                    if (!peer || !peer.id)
+                    {
+                        clearInterval(checkPeer);
+                        document.getElementById('status-msg').innerText = "初始化失敗，請重新整理頁面";
+                    }
+                }, 10000);
+                return;
+            }
+
+            // 如果 peer 已存在但未連線到伺服器
+            if (!peer.id)
+            {
+                document.getElementById('status-msg').innerText = "等待伺服器連線...";
+                const waitForId = setInterval(() =>
+                {
+                    if (peer.id)
+                    {
+                        clearInterval(waitForId);
+                        doConnect(tid);
+                    }
+                }, 100);
+
+                setTimeout(() =>
+                {
+                    clearInterval(waitForId);
+                    if (!peer.id)
+                    {
+                        document.getElementById('status-msg').innerText = "伺服器連線失敗，請重新整理";
+                    }
+                }, 10000);
                 return;
             }
 
@@ -510,37 +577,64 @@
         function doConnect(tid)
         {
             document.getElementById('status-msg').innerText = "連線中...";
-            console.log('Attempting to connect to:', tid);
+            console.log('📤 嘗試連線到:', tid);
+            console.log('我的 Peer ID:', peer.id);
 
-            conn = peer.connect(tid, {
-                reliable: true
-            });
+            try
+            {
+                conn = peer.connect(tid, {
+                    reliable: true,
+                    serialization: 'json'
+                });
+            } catch (err)
+            {
+                console.error('❌ 連線失敗:', err);
+                document.getElementById('status-msg').innerText = "連線建立失敗: " + err.message;
+                return;
+            }
 
-            // 主動連線者當作 AI (紅方/後手，只是用變數 AI 代表 P2)
             myRole = 'AI';
+
+            let connectionTimeout;
 
             conn.on('open', () =>
             {
-                console.log('Connection established');
+                clearTimeout(connectionTimeout);
+                console.log('✓ 連線成功建立');
                 document.getElementById('status-msg').innerText = "連線成功！";
+                document.getElementById('status-msg').style.color = '#4CAF50';
                 setupConn();
                 startGame();
             });
 
             conn.on('error', (err) =>
             {
-                console.error('Connection error:', err);
-                document.getElementById('status-msg').innerText = "連線失敗: " + err.type;
+                clearTimeout(connectionTimeout);
+                console.error('❌ 連線錯誤:', err);
+                document.getElementById('status-msg').innerText = "連線錯誤: " + (err.type || err.message);
             });
 
-            setTimeout(() =>
+            conn.on('close', () =>
+            {
+                console.log('⚠ 連線已關閉');
+            });
+
+            // 延長逾時時間到 15 秒
+            connectionTimeout = setTimeout(() =>
             {
                 if (!conn || !conn.open)
                 {
-                    console.error('Connection timeout');
-                    document.getElementById('status-msg').innerText = "找不到房間或連線逾時，請確認代碼正確";
+                    console.error('❌ 連線逾時');
+                    console.log('可能原因:');
+                    console.log('1. 對方的代碼不存在');
+                    console.log('2. 對方已離線');
+                    console.log('3. 網路環境限制 P2P 連線');
+                    console.log('4. 防火牆阻擋');
+
+                    document.getElementById('status-msg').innerText = "連線逾時。請確認:\n1. 代碼正確\n2. 對方在線上\n3. 雙方都開著網頁";
+                    document.getElementById('status-msg').style.whiteSpace = 'pre-line';
                 }
-            }, 8000); // 延長至 8 秒
+            }, 15000);
         }
 
         function setupConn()
